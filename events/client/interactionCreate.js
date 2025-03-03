@@ -1,0 +1,135 @@
+const { Collection, InteractionType, Events } = require("discord.js");
+const { errorLog, cmdLog, warningLog, infoLog } = require("../../configs/logger");
+const chalk = require("chalk");
+const { getRuntime, errorEmbed } = require("../../helper/utils");
+const { OWNERID } = require("../../helper/constants");
+
+module.exports = {
+	name: Events.InteractionCreate,
+	async execute(interaction, client) {
+		if (interaction.isChatInputCommand()) {
+			const { slashCommands } = client;
+			const { commandName } = interaction;
+			const command = slashCommands.get(commandName)
+
+			// For message commandds aliases -> || slashCommands.find(cmd => cmd.aliases && cmd.aliases.includes(commandName));
+
+			if (!command) {
+				warningLog(`No command matching ${commandName} was found.`)
+				return;
+			}
+
+			const { cooldowns } = client;
+			if (!cooldowns.has(command.data.name)) {
+				cooldowns.set(command.data.name, new Collection());
+			}
+
+			const now = Date.now();
+			const timestamps = cooldowns.get(command.data.name);
+			const defaultCooldownDuration = 3;
+			const cooldownAmount = (command.cooldown ?? defaultCooldownDuration) * 1000;
+
+			if (timestamps.has(interaction.user.id)) {
+				const expirationTime = timestamps.get(interaction.user.id) + cooldownAmount;
+
+				if (now < expirationTime) {
+					const expiredTimestamp = Math.round(expirationTime / 1000);
+					await interaction.reply({
+						embeds: [errorEmbed(` Please wait, you are on a cooldown for \`${command.data.name}\`. You can use it again after <t:${expiredTimestamp}:R>.`)],
+						ephemeral: true
+					});
+					return;
+				}
+			}
+
+			if (interaction.user.id !== OWNERID) {
+				timestamps.set(interaction.user.id, now);
+				setTimeout(() => {
+					timestamps.delete(interaction.user.id)
+				}, cooldownAmount);
+			}
+
+			try {
+				await command.execute(interaction, client);
+			} catch (error) {
+				errorLog(error);
+				if (interaction.replied || interaction.deferred) {
+					await interaction.followUp({
+						content: 'There was an error while executing this command!',
+						ephemeral: true
+					});
+				} else {
+					await interaction.reply({
+						content: 'There was an error while executing this command!',
+						ephemeral: true
+					});
+				}
+			}
+
+			cmdLog(command.data.name, 'ApplicationCommand', interaction.guild.name, interaction.channel.name, interaction.member.user.username)
+			// command.data.name commandType guild.name channel.name member.user.username
+		} else if (interaction.isButton()) {
+			const { buttons } = client;
+			const { customId } = interaction;
+			const button = buttons.get(customId)
+
+			if (!button) {
+				if (customId.startsWith('@')) return
+				return warningLog(`There is no code for ${customId} button.`)
+			}
+
+			try {
+				await button.execute(interaction, client)
+			} catch (error) {
+				errorLog(error);
+				if (interaction.replied || interaction.deferred) {
+					await interaction.followUp({ content: 'There was an error while executing this button!', ephemeral: true });
+				} else {
+					await interaction.reply({ content: 'There was an error while executing this button!', ephemeral: true });
+				}
+			}
+			cmdLog(button.data.name, 'ButtonComponent', interaction.guild.name, interaction.channel.name, interaction.member.user.username)
+
+		} else if (interaction.isStringSelectMenu()) {
+			const { selectMenus } = client;
+			const { customId } = interaction;
+			const menu = selectMenus.get(customId)
+
+            if (!menu) {
+				if (customId.startsWith('@')) return
+				return warningLog(`There is no code for ${customId} menu.`)
+			}
+
+			try {
+				await menu.execute(interaction, client);
+			} catch (error) {
+				errorLog(error);
+				if (interaction.replied || interaction.deferred) {
+					await interaction.followUp({ content: 'There was an error while executing this menu!', ephemeral: true });
+				} else {
+					await interaction.reply({ content: 'There was an error while executing this menu!', ephemeral: true });
+				}
+			}
+			cmdLog(menu.data.name, 'SelectMenuComponent', interaction.guild.name, interaction.channel.name, interaction.member.user.username)
+
+		} else if (interaction.type == InteractionType.ApplicationCommandAutocomplete) {
+			const { autoComplete } = client;
+			const { commandName } = interaction;
+			const command = autoComplete.get(commandName);
+			if (!command) return warningLog(`There is no code for ${command.data.name} autocomplete.`)
+			const autoResponseQueryStart = process.hrtime.bigint();
+			const query = interaction.options.getFocused()?.toLowerCase() || '';
+			try {
+				await command.autocomplete(interaction, client)
+			} catch (error) {
+				errorLog(error);
+			}
+			infoLog('DEBUG', '', `<${chalk.cyanBright(commandName)}> | Auto Complete | Queried "${chalk.green(query)}" in ${getRuntime(autoResponseQueryStart).ms} ms`)
+		}
+	}
+}
+/*
+`
+
+
+*/
